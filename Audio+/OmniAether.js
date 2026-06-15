@@ -143,6 +143,18 @@ function togglePower() {
 
 function updateFrequency() {
     const bandInfo = bands[State.selectedBand];
+    
+    // Update UI active states for bands
+    Object.keys(bands).forEach(b => {
+        const el = document.getElementById(`band-${b.toLowerCase()}`);
+        if (el) {
+            const isActive = b === State.selectedBand;
+            el.classList.toggle('bg-red-950', isActive);
+            el.classList.toggle('border-red-600', isActive);
+            el.classList.toggle('text-red-400', isActive);
+        }
+    });
+
     const scaleWidth = bandInfo.max - bandInfo.min;
     State.currentFrequency = bandInfo.min + (scaleWidth * (State.coarseTuning / 100)) + State.fineTuning;
     State.currentFrequency = Math.max(bandInfo.min, Math.min(bandInfo.max, State.currentFrequency));
@@ -263,7 +275,7 @@ function drawWaterfallFrame() {
     // Draw tuning line overlay at the bottom of the waterfall
     if (State.isPowerOn) {
         const cursorX = ((centerBin - startBin) / span) * width;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        UI.ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
         UI.ctx.fillRect(Math.floor(cursorX) - 1, UI.canvas.height - 6, 2, 6);
     }
 
@@ -321,6 +333,12 @@ function checkSignalLock() {
             }
         }
     });
+
+    const lockLabel = document.getElementById('lock-percent');
+    if (lockLabel) {
+        lockLabel.innerText = `LOCKED: ${Math.round(bestLock)}%`;
+    }
+
     const statusBadge = document.getElementById('signal-status-badge');
     const eyeBeam = document.getElementById('magic-eye-beam');
     
@@ -373,22 +391,52 @@ function snapToSignal() {
     }
 }
 
-function updateTuning(v) { State.coarseTuning = parseFloat(v); updateFrequency(); }
-function updateFineTuning(v) { State.fineTuning = parseFloat(v); updateFrequency(); }
+function updateTuning(v) { 
+    State.coarseTuning = parseFloat(v); 
+    document.getElementById('coarse-val').innerText = `${State.coarseTuning.toFixed(1)}%`;
+    updateFrequency(); 
+}
+function updateFineTuning(v) { 
+    State.fineTuning = parseFloat(v); 
+    document.getElementById('fine-val').innerText = State.fineTuning.toFixed(2);
+    updateFrequency(); 
+}
 function toggleHelpModal() { document.getElementById('help-modal').classList.toggle('hidden'); }
 
 function setupKnobDragListeners() {
-    const setupKnob = (id, callback, val) => {
+    const setupKnob = (id, stateKey, labelId, pointerId) => {
         const knob = document.getElementById(id);
+        const label = document.getElementById(labelId);
+        const pointer = document.getElementById(pointerId);
         let isDragging = false;
-        knob.addEventListener('mousedown', () => isDragging = true);
-        window.addEventListener('mousemove', (e) => {
-            if (isDragging) callback(Math.min(100, Math.max(0, val++))); // Basic drag logic
+        let startY = 0;
+        let startVal = State[stateKey];
+
+        knob.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startY = e.clientY;
+            startVal = State[stateKey];
+            document.body.style.cursor = 'ns-resize';
         });
-        window.addEventListener('mouseup', () => isDragging = false);
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const delta = (startY - e.clientY) * 0.5;
+            const newVal = Math.min(100, Math.max(0, startVal + delta));
+            State[stateKey] = newVal;
+            
+            if (label) label.innerText = `${Math.round(newVal)}%`;
+            if (pointer) pointer.style.transform = `rotate(${(newVal - 50) * 2.4}deg)`;
+            updateAudioParameters();
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+            document.body.style.cursor = 'default';
+        });
     };
-    setupKnob('knob-volume', v => State.volume = v, State.volume);
-    setupKnob('knob-coupling', v => State.antennaCoupling = v, State.antennaCoupling);
+    setupKnob('knob-volume', 'volume', 'volume-val', 'vol-pointer');
+    setupKnob('knob-coupling', 'antennaCoupling', 'coupling-val', 'coupling-pointer');
 }
 
 function updateCompass(v) { State.physicalHeading = v; updateFrequency(); }
