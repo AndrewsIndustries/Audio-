@@ -111,15 +111,20 @@ function initAudio() {
     AudioNodes.analyser = audioCtx.createAnalyser();
     AudioNodes.analyser.fftSize = 512;
 
+    AudioNodes.masterFilter = audioCtx.createBiquadFilter();
+    AudioNodes.masterFilter.type = 'lowpass';
+    AudioNodes.masterFilter.frequency.setValueAtTime(6000, audioCtx.currentTime);
+
     AudioNodes.staticNoise.connect(AudioNodes.fadingGain);
     AudioNodes.fadingGain.connect(AudioNodes.staticGain);
     humGain.connect(AudioNodes.staticGain);
     pulsarGain.connect(AudioNodes.staticGain);
     bioGain.connect(AudioNodes.staticGain);
 
-    AudioNodes.staticGain.connect(AudioNodes.analyser);
+    AudioNodes.staticGain.connect(AudioNodes.masterFilter);
+    AudioNodes.masterFilter.connect(AudioNodes.analyser);
     AudioNodes.staticGain.connect(AudioNodes.spatialChorus);
-    AudioNodes.spatialChorus.connect(AudioNodes.analyser);
+    AudioNodes.spatialChorus.connect(AudioNodes.masterFilter);
 
     // Request motion permissions for Doppler effect (required for modern browsers)
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
@@ -199,6 +204,12 @@ function setupMicNodes() {
     AudioNodes.mic.gain.gain.setValueAtTime(0.0, audioCtx.currentTime);
     AudioNodes.mic.bandpass.connect(AudioNodes.mic.gain);
     AudioNodes.mic.gain.connect(AudioNodes.analyser);
+}
+
+function setFilterBandwidth(hz) {
+    if (AudioNodes.masterFilter) {
+        AudioNodes.masterFilter.frequency.setTargetAtTime(hz, audioCtx.currentTime, 0.1);
+    }
 }
 
 function pcmToWav(pcmBase64, sampleRate = 24000) {

@@ -26,7 +26,8 @@ const State = {
     peakDb: -100,
     squelchEnabled: false,
     squelchThreshold: -40,
-    isAfcEnabled: false
+    isAfcEnabled: false,
+    lastLockPct: 0
 };
 
 const UI = {
@@ -159,8 +160,14 @@ function updateFrequency() {
     State.currentFrequency = bandInfo.min + (scaleWidth * (State.coarseTuning / 100)) + State.fineTuning;
     State.currentFrequency = Math.max(bandInfo.min, Math.min(bandInfo.max, State.currentFrequency));
     UI.freqDisplay.innerText = State.currentFrequency.toLocaleString(undefined, { minimumFractionDigits: 3 });
+    
+    const unitDisplay = document.getElementById('unit-display');
+    if (unitDisplay) unitDisplay.innerText = bandInfo.unit;
+
     const percentageOffset = (State.coarseTuning - 50) * -12.5;
     document.getElementById('dial-scale-container').style.transform = `translateX(${percentageOffset}px)`;
+    
+    updateDensity();
     checkSignalLock();
     updateAudioParameters();
 }
@@ -211,6 +218,16 @@ function updateAudioParameters() {
     } else if (AudioNodes.mic.gain) {
         AudioNodes.mic.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
     }
+
+    // Animate Vacuum Tube Filaments based on Power and Volume
+    const filamentOpacity = State.isPowerOn ? 0.3 + (State.volume / 100) * 0.7 : 0.05;
+    ['filament-1', 'filament-2'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.backgroundColor = `rgba(255, 60, 0, ${filamentOpacity})`;
+            el.style.boxShadow = `0 0 ${15 * filamentOpacity}px rgba(255, 60, 0, ${filamentOpacity})`;
+        }
+    });
 }
 
 function drawWaterfallFrame() {
@@ -244,6 +261,17 @@ function drawWaterfallFrame() {
         if (UI.peakDisplay) UI.peakDisplay.innerText = `PEAK: ${State.peakDb.toFixed(1)} dB`;
 
         document.body.classList.toggle('redline-active', rmsDb > -3);
+
+        // Animate Magic Eye (Tuning Indicator)
+        const eyeValue = (State.lastLockPct / 100) * 0.8 + (Math.max(0, rmsDb + 60) / 60) * 0.2;
+        const beamAngle = 90 - (eyeValue * 85); 
+        const rad = (beamAngle * Math.PI) / 180;
+        const ex = 50 + 40 * Math.cos(rad);
+        const ey = 50 + 40 * Math.sin(rad);
+        const eyeBeam = document.getElementById('magic-eye-beam');
+        if (eyeBeam) {
+            eyeBeam.setAttribute('d', `M 50 50 L 90 50 A 40 40 0 0 1 ${ex} ${ey} Z`);
+        }
     }
 
     // Calculate spectral window based on zoom and tuning
@@ -294,7 +322,9 @@ function logTransmission(message, type = "data") {
 
 function setBand(band) {
     State.selectedBand = band;
-    document.getElementById('dial-indicator-band-mode').innerText = `Band Mode: ${bands[band].label}`;
+    const bandInfo = bands[band];
+    document.getElementById('dial-indicator-band-mode').innerText = `Band Mode: ${bandInfo.label}`;
+    document.getElementById('current-band-label').innerText = bandInfo.desc;
     updateFrequency();
 }
 
@@ -303,8 +333,19 @@ async function fetchNOAASpaceWeather() {
         const speedRes = await fetch('https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json');
         const speedData = await speedRes.json();
         State.solarWindSpeed = parseFloat(speedData.wind_speed || 400);
+        
+        // Sync all weather telemetry to UI
         document.getElementById('solar-wind-val').innerText = `${State.solarWindSpeed.toFixed(0)} km/s`;
-    } catch (e) { console.warn("NOAA Offline"); }
+        document.getElementById('solar-flux-val').innerText = `${State.solarFluxIndex} SFU`;
+        document.getElementById('imf-bz-val').innerText = `${State.solarIMFField} nT`;
+        
+        const badge = document.getElementById('noaa-status-badge');
+        badge.innerText = "NOAA DATA SYNCED";
+        badge.className = "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-900 border border-emerald-800 text-emerald-400";
+    } catch (e) { 
+        console.warn("NOAA Offline"); 
+        document.getElementById('noaa-status-badge').innerText = "NOAA OFFLINE (SIMULATED)";
+    }
 }
 
 function generateDialScale() {
@@ -334,6 +375,7 @@ function checkSignalLock() {
         }
     });
 
+    State.lastLockPct = bestLock;
     const lockLabel = document.getElementById('lock-percent');
     if (lockLabel) {
         lockLabel.innerText = `LOCKED: ${Math.round(bestLock)}%`;
@@ -347,12 +389,16 @@ function checkSignalLock() {
         statusBadge.className = "px-2 py-0.5 rounded text-[10px] text-red-500 border border-red-500/50 animate-pulse";
         eyeBeam.setAttribute('fill', '#ff0000');
         State.lockedStation = target;
+        document.getElementById('tuned-station-id').innerText = target.name;
+        document.getElementById('tuned-station-desc').innerText = target.desc;
         document.getElementById('demodulate-btn').disabled = false;
     } else {
         statusBadge.innerText = "NO LOCK";
         statusBadge.className = "px-2 py-0.5 rounded text-[10px] text-red-400";
         eyeBeam.setAttribute('fill', 'rgba(255, 0, 0, 0.2)');
         State.lockedStation = null;
+        document.getElementById('tuned-station-id').innerText = "AETHER STATIC";
+        document.getElementById('tuned-station-desc').innerText = "Adjust dials to lock carrier...";
         document.getElementById('demodulate-btn').disabled = true;
     }
 }
@@ -360,7 +406,16 @@ function checkSignalLock() {
 function stopAudio() {
     if (audioPlaying) { audioPlaying.pause(); audioPlaying = null; }
 }
-function updateZoom(v) { spectrumZoom = parseFloat(v); }
+
+function updateZoom(v) { State.spectrumZoom = parseFloat(v); }
+
+function updateDensity() {
+    const density = Math.min(100, (State.solarFluxIndex / 250) * 50 + (State.antennaCoupling / 2));
+    const el = document.getElementById('density-display');
+    if (el) el.innerText = `${density.toFixed(2)} %`;
+}
+
+function resetPeak() { State.peakDb = -100; }
 
 function setSquelch(enabled) {
     State.squelchEnabled = enabled;
