@@ -102,14 +102,14 @@ function initAudio() {
     AudioNodes.spatialChorus.delayTime.setValueAtTime(0.04, audioCtx.currentTime);
     const chorusLFO = audioCtx.createOscillator();
     chorusLFO.type = 'sine';
-    chorusLFO.frequency.setValueAtTime(4.0, audioCtx.currentTime);
+    chorusLFO.frequency.setValueAtTime(0.5, audioCtx.currentTime); // Slower, more atmospheric phase shift
     const chorusLFODepth = audioCtx.createGain();
     chorusLFODepth.gain.setValueAtTime(0.005, audioCtx.currentTime);
     chorusLFO.connect(chorusLFODepth);
     chorusLFODepth.connect(AudioNodes.spatialChorus.delayTime);
 
     AudioNodes.analyser = audioCtx.createAnalyser();
-    AudioNodes.analyser.fftSize = 512;
+    AudioNodes.analyser.fftSize = 1024; // Increased resolution for better waterfall detail
 
     AudioNodes.masterFilter = audioCtx.createBiquadFilter();
     AudioNodes.masterFilter.type = 'lowpass';

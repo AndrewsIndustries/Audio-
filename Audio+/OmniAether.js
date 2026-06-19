@@ -27,7 +27,9 @@ const State = {
     squelchEnabled: false,
     squelchThreshold: -40,
     isAfcEnabled: false,
-    lastLockPct: 0
+    lastLockPct: 0,
+    wifiHistory: Array.from({ length: 32 }, () => Array(14).fill(0)),
+    serialHardwareLinked: false
 };
 
 const UI = {
@@ -39,7 +41,8 @@ const UI = {
     snrDisplay: null,
     peakDisplay: null,
     logBox: null,
-    tuningSlider: null
+    tuningSlider: null,
+    wifiCanvas: null
 };
 
 const bands = {
@@ -73,6 +76,10 @@ window.onload = function() {
     UI.peakDisplay = document.getElementById('snr-peak-display');
     UI.logBox = document.getElementById('telemetry-log');
     UI.tuningSlider = document.getElementById('tuning-slider');
+    UI.wifiCanvas = document.getElementById('wifi-heatmap-canvas');
+    if (UI.wifiCanvas) {
+        UI.wifiCanvas.width = 140; UI.wifiCanvas.height = 320;
+    }
 
     lucide.createIcons();
     generateDialScale();
@@ -83,6 +90,7 @@ window.onload = function() {
     updateFrequency();
     renderMemoryBank();
     setupDragAndDrop();
+    setupDialDrag();
 };
 
 function toggleScan() {
@@ -115,7 +123,7 @@ function performScanStep() {
         document.getElementById('scan-btn').classList.remove('bg-red-600', 'text-white', 'animate-pulse');
         logTransmission(`Scan Halted: Signal detected at ${State.currentFrequency.toFixed(2)} ${bands[State.selectedBand].unit}`, "system");
     } else {
-        setTimeout(() => requestAnimationFrame(performScanStep), 10);
+        requestAnimationFrame(performScanStep);
     }
 }
 
@@ -127,13 +135,17 @@ function togglePower() {
     const txt = document.getElementById('power-text');
     if (State.isPowerOn) {
         if (audioCtx.state === 'suspended') audioCtx.resume();
-        btn.className = "px-4 py-1.5 rounded font-bold text-xs transition-all bg-red-600 text-black border-red-600";
-        led.className = "w-2 h-2 rounded-full bg-red-500 shadow-[0_0_12px_rgba(255,0,0,0.8)]";
+        btn.classList.add('bg-red-600', 'text-black', 'border-red-600');
+        btn.classList.remove('bg-black', 'text-zinc-500', 'border-zinc-800');
+        led.classList.add('bg-red-500', 'shadow-[0_0_12px_rgba(255,0,0,0.8)]');
+        led.classList.remove('bg-zinc-900');
         txt.innerText = "ON";
         logTransmission("Filaments loaded. Omni-Receiver Online.", "system");
     } else {
-        btn.className = "px-4 py-1.5 rounded font-bold text-xs bg-zinc-800 text-zinc-400";
-        led.className = "w-2 h-2 rounded-full bg-zinc-900";
+        btn.classList.remove('bg-red-600', 'text-black', 'border-red-600');
+        btn.classList.add('bg-black', 'text-zinc-500', 'border-zinc-800');
+        led.classList.remove('bg-red-500', 'shadow-[0_0_12px_rgba(255,0,0,0.8)]');
+        led.classList.add('bg-zinc-900');
         txt.innerText = "OFF";
         logTransmission("Powering down. See you in the noise.", "system");
         stopAudio();
@@ -261,15 +273,14 @@ function drawWaterfallFrame() {
         if (UI.peakDisplay) UI.peakDisplay.innerText = `PEAK: ${State.peakDb.toFixed(1)} dB`;
 
         document.body.classList.toggle('redline-active', rmsDb > -3);
-
-        // Animate Magic Eye (Tuning Indicator)
-        const eyeValue = (State.lastLockPct / 100) * 0.8 + (Math.max(0, rmsDb + 60) / 60) * 0.2;
-        const beamAngle = 90 - (eyeValue * 85); 
-        const rad = (beamAngle * Math.PI) / 180;
-        const ex = 50 + 40 * Math.cos(rad);
-        const ey = 50 + 40 * Math.sin(rad);
-        const eyeBeam = document.getElementById('magic-eye-beam');
-        if (eyeBeam) {
+        
+        if (State.lastLockPct > 0 || rmsDb > -80) {
+            const eyeValue = (State.lastLockPct / 100) * 0.8 + (Math.max(0, rmsDb + 60) / 60) * 0.2;
+            const beamAngle = 90 - (eyeValue * 85); 
+            const rad = (beamAngle * Math.PI) / 180;
+            const ex = 50 + 40 * Math.cos(rad);
+            const ey = 50 + 40 * Math.sin(rad);
+            const eyeBeam = document.getElementById('magic-eye-beam');
             eyeBeam.setAttribute('d', `M 50 50 L 90 50 A 40 40 0 0 1 ${ex} ${ey} Z`);
         }
     }
@@ -303,18 +314,42 @@ function drawWaterfallFrame() {
     // Draw tuning line overlay at the bottom of the waterfall
     if (State.isPowerOn) {
         const cursorX = ((centerBin - startBin) / span) * width;
-        UI.ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        UI.ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
         UI.ctx.fillRect(Math.floor(cursorX) - 1, UI.canvas.height - 6, 2, 6);
     }
 
+    drawWifiHeatMap();
     requestAnimationFrame(drawWaterfallFrame);
+}
+
+function drawWifiHeatMap() {
+    if (!UI.wifiCanvas || !State.isPowerOn) return;
+    const ctx = UI.wifiCanvas.getContext('2d');
+    const w = UI.wifiCanvas.width;
+    const h = UI.wifiCanvas.height;
+    
+    // Shift history and inject new simulated noise based on Coupling
+    State.wifiHistory.shift();
+    const newRow = Array.from({ length: 14 }, () => Math.random() * (State.antennaCoupling / 100) * 255);
+    State.wifiHistory.push(newRow);
+
+    const cellW = w / 14;
+    const cellH = h / 32;
+
+    State.wifiHistory.forEach((row, y) => {
+        row.forEach((val, x) => {
+            // Electric Red palette
+            ctx.fillStyle = `rgb(${val}, ${val * 0.1}, ${val * 0.1})`;
+            ctx.fillRect(x * cellW, y * cellH, cellW, cellH);
+        });
+    });
 }
 
 // Telemetry, Tuning, and Log functions... (rest of the logic here)
 function logTransmission(message, type = "data") {
     const logBox = document.getElementById('telemetry-log');
     const entry = document.createElement('div');
-    entry.className = type === "system" ? "text-zinc-500 italic" : "text-red-500";
+    entry.className = `flex gap-2 border-b border-zinc-900/50 pb-1 ${type === "system" ? "text-zinc-500 italic" : "text-red-500"}`;
     entry.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
     logBox.appendChild(entry);
     logBox.scrollTop = logBox.scrollHeight;
@@ -386,7 +421,7 @@ function checkSignalLock() {
     
     if (bestLock > 65) {
         statusBadge.innerText = "CARRIER LOCK";
-        statusBadge.className = "px-2 py-0.5 rounded text-[10px] text-red-500 border border-red-500/50 animate-pulse";
+        statusBadge.classList.add('text-red-500', 'border-red-500/50', 'animate-pulse');
         eyeBeam.setAttribute('fill', '#ff0000');
         State.lockedStation = target;
         document.getElementById('tuned-station-id').innerText = target.name;
@@ -394,7 +429,7 @@ function checkSignalLock() {
         document.getElementById('demodulate-btn').disabled = false;
     } else {
         statusBadge.innerText = "NO LOCK";
-        statusBadge.className = "px-2 py-0.5 rounded text-[10px] text-red-400";
+        statusBadge.classList.remove('text-red-500', 'border-red-500/50', 'animate-pulse');
         eyeBeam.setAttribute('fill', 'rgba(255, 0, 0, 0.2)');
         State.lockedStation = null;
         document.getElementById('tuned-station-id').innerText = "AETHER STATIC";
@@ -458,6 +493,28 @@ function updateFineTuning(v) {
 }
 function toggleHelpModal() { document.getElementById('help-modal').classList.toggle('hidden'); }
 
+function setupDialDrag() {
+    const dialWindow = document.getElementById('dial-window');
+    let isDragging = false;
+    let lastX = 0;
+
+    dialWindow.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        lastX = e.clientX;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const deltaX = (e.clientX - lastX) * 0.1;
+        State.coarseTuning = Math.min(100, Math.max(0, State.coarseTuning - deltaX));
+        UI.tuningSlider.value = State.coarseTuning;
+        updateFrequency();
+        lastX = e.clientX;
+    });
+
+    window.addEventListener('mouseup', () => isDragging = false);
+}
+
 function setupKnobDragListeners() {
     const setupKnob = (id, stateKey, labelId, pointerId) => {
         const knob = document.getElementById(id);
@@ -502,6 +559,12 @@ function setupCompassSupport() {
 async function demodulateCurrent() {
     if (!State.isPowerOn || !State.lockedStation) return;
     const loader = document.getElementById('ai-loading');
+    
+    if (!apiKey) {
+        logTransmission("Error: API Key missing in OmniAether.js. Please provide a Gemini API Key.", "system");
+        return;
+    }
+
     loader.classList.remove('hidden');
     try {
         const prompt = `Transcribe the ${State.selectedBand} broadcast at ${State.currentFrequency} ${bands[State.selectedBand].unit}: ${State.lockedStation.desc}. Keep it under 50 words and very atmospheric.`;
@@ -647,6 +710,13 @@ async function toggleMicAntenna() {
     }
     lucide.createIcons();
     updateAudioParameters();
+}
+
+async function toggleSerialLink() {
+    // Placeholder for Web Serial API integration for Uniden/SDR hardware
+    State.serialHardwareLinked = !State.serialHardwareLinked;
+    logTransmission(`Hardware Serial Bridge: ${State.serialHardwareLinked ? 'LINKED' : 'DISCONNECTED'}`, "system");
+    document.getElementById('serial-status-btn').classList.toggle('text-red-600', State.serialHardwareLinked);
 }
 
 function clearLogs() { document.getElementById('telemetry-log').innerHTML = ''; }
